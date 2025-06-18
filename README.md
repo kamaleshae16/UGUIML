@@ -3,6 +3,8 @@ XML style language for creating uGUI GameObject hierachies in Unity.
 
 This library was created since I found Unity's uxml & uss system to be to cumbersome and it's animation system to rigid. This allows for text files to be created manually or by LLM as I needed a solution where GUI and GUI assets could be loaded during runtime from on external source. However the GameObject uGUI system is still used allowing the familiar development patterns developed over the years without retraining designers.
 
+A lot of this code was AI generated with expert guidance. It is however sloppy and in active development. Concider this a prototype. A better solution may be to use ScriptableObjects/prefabs for templating or parse uxml/uidocs to uGUI and uss to animation components.
+
 ## Features: 
 
 - Automatic uGUI opimization practices.
