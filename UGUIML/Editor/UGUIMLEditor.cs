@@ -114,6 +114,23 @@ public class UGUIMLEditor : UnityEditor.Editor
         
         scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition, GUILayout.MaxHeight(200));
 
+        // Show nested canvases
+        if (uguimlComponent.nestedCanvases.Count > 0)
+        {
+            EditorGUILayout.LabelField($"Nested Canvases ({uguimlComponent.nestedCanvases.Count}):", EditorStyles.boldLabel);
+            foreach (var kvp in uguimlComponent.nestedCanvases)
+            {
+                EditorGUILayout.BeginHorizontal();
+                EditorGUILayout.LabelField($"  {kvp.Key}", GUILayout.Width(150));
+                if (GUILayout.Button("Select", GUILayout.Width(60)))
+                {
+                    Selection.activeGameObject = kvp.Value.gameObject;
+                }
+                EditorGUILayout.EndHorizontal();
+            }
+            EditorGUILayout.Space();
+        }
+
         // Show buttons
         if (uguimlComponent.buttons.Count > 0)
         {
@@ -126,9 +143,10 @@ public class UGUIMLEditor : UnityEditor.Editor
                 {
                     Selection.activeGameObject = kvp.Value.gameObject;
                 }
-                if (GUILayout.Button("Execute", GUILayout.Width(60)) && Application.isPlaying)
+                if (GUILayout.Button("Click", GUILayout.Width(60)) && Application.isPlaying)
                 {
-                    kvp.Value.ExecuteCommand();
+                    // Simulate button click through onClick event
+                    kvp.Value.onClick.Invoke();
                 }
                 EditorGUILayout.EndHorizontal();
             }

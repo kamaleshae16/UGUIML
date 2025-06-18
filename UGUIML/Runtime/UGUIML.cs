@@ -21,7 +21,7 @@ public class UGUIML : MonoBehaviour
     private UGUIMLResources guiResources;
 
     [Header("UI Element Dictionaries")]
-    public Dictionary<string, UGUIMLButton> buttons = new Dictionary<string, UGUIMLButton>();
+    public Dictionary<string, Button> buttons = new Dictionary<string, Button>();
     public Dictionary<string, CanvasGroup> panels = new Dictionary<string, CanvasGroup>();
     public Dictionary<string, TMP_Text> textElements = new Dictionary<string, TMP_Text>();
     public Dictionary<string, RawImage> images = new Dictionary<string, RawImage>();
@@ -40,6 +40,10 @@ public class UGUIML : MonoBehaviour
     public Dictionary<string, VerticalLayoutGroup> verticalLayouts = new Dictionary<string, VerticalLayoutGroup>();
     public Dictionary<string, GridLayoutGroup> gridLayouts = new Dictionary<string, GridLayoutGroup>();
 
+    [Header("Nested Canvases")]
+    public Dictionary<string, Canvas> nestedCanvases = new Dictionary<string, Canvas>();
+    public Dictionary<string, GraphicRaycaster> nestedRaycasters = new Dictionary<string, GraphicRaycaster>();
+
     private XmlDocument xmlDocument;
 
     public Canvas TargetCanvas => targetCanvas;
@@ -51,7 +55,7 @@ public class UGUIML : MonoBehaviour
     private void Awake()
     {
         // Initialize dictionaries if they're null (safety check)
-        if (buttons == null) buttons = new Dictionary<string, UGUIMLButton>();
+        if (buttons == null) buttons = new Dictionary<string, Button>();
         if (panels == null) panels = new Dictionary<string, CanvasGroup>();
         if (textElements == null) textElements = new Dictionary<string, TMP_Text>();
         if (images == null) images = new Dictionary<string, RawImage>();
@@ -70,12 +74,19 @@ public class UGUIML : MonoBehaviour
         if (verticalLayouts == null) verticalLayouts = new Dictionary<string, VerticalLayoutGroup>();
         if (gridLayouts == null) gridLayouts = new Dictionary<string, GridLayoutGroup>();
 
+        // Initialize nested canvas dictionaries
+        if (nestedCanvases == null) nestedCanvases = new Dictionary<string, Canvas>();
+        if (nestedRaycasters == null) nestedRaycasters = new Dictionary<string, GraphicRaycaster>();
+
         targetCanvas = GetComponent<Canvas>();
         if (targetCanvas == null)
         {
             Debug.LogError("UGUIML: Canvas component not found! This component requires a Canvas component on the same GameObject.");
             return;
         }
+
+        // Ensure the main canvas has proper scaler settings for UGUIML layouts
+        EnsureCanvasScalerConfiguration();
 
         guiResources = UGUIMLResources.Singleton;
         if (guiResources == null)
@@ -89,6 +100,31 @@ public class UGUIML : MonoBehaviour
         if (autoLoadOnStart && xmlFile != null)
         {
             LoadXML();
+        }
+    }
+
+    /// <summary>
+    /// Ensure the main canvas has proper CanvasScaler configuration for UGUIML layouts
+    /// </summary>
+    private void EnsureCanvasScalerConfiguration()
+    {
+        CanvasScaler scaler = GetComponent<CanvasScaler>();
+        if (scaler == null)
+        {
+            scaler = gameObject.AddComponent<CanvasScaler>();
+            Debug.Log("UGUIML: Added CanvasScaler component to main canvas");
+        }
+
+        // Set default UGUIML-optimized scaler settings if not already configured properly
+        if (scaler.uiScaleMode != CanvasScaler.ScaleMode.ScaleWithScreenSize ||
+            scaler.referenceResolution != new Vector2(1920, 1080))
+        {
+            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = new Vector2(1920, 1080);
+            scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+            scaler.matchWidthOrHeight = 0.5f; // Balanced scaling between width and height
+            
+            Debug.Log($"UGUIML: Configured main canvas scaler with 1920x1080 reference resolution and 0.5 match ratio");
         }
     }
 
@@ -205,6 +241,10 @@ public class UGUIML : MonoBehaviour
         horizontalLayouts.Clear();
         verticalLayouts.Clear();
         gridLayouts.Clear();
+
+        // Clear nested canvas dictionaries
+        nestedCanvases.Clear();
+        nestedRaycasters.Clear();
 
         // Destroy child GameObjects
         if (targetCanvas != null)
@@ -382,6 +422,9 @@ public class UGUIML : MonoBehaviour
             // Create specific UI component based on type
             switch (elementType)
             {
+                case "canvas":
+                    CreateNestedCanvas(elementObject, node);
+                    break;
                 case "panel":
                     CreatePanel(elementObject, node);
                     break;
@@ -542,6 +585,121 @@ public class UGUIML : MonoBehaviour
         }
     }
 
+    private void CreateNestedCanvas(GameObject canvasObject, XmlNode node)
+    {
+        try
+        {
+            if (canvasObject == null)
+            {
+                Debug.LogError("UGUIML CreateNestedCanvas: canvasObject is null!");
+                return;
+            }
+
+            if (node == null)
+            {
+                Debug.LogError("UGUIML CreateNestedCanvas: node is null!");
+                return;
+            }
+
+            // Add Canvas component
+            Canvas nestedCanvas = canvasObject.AddComponent<Canvas>();
+            
+            // Configure canvas properties from XML
+            string renderMode = GetAttribute(node, "renderMode", "overlay").ToLower();
+            switch (renderMode)
+            {
+                case "overlay":
+                    nestedCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
+                    break;
+                case "camera":
+                    nestedCanvas.renderMode = RenderMode.ScreenSpaceCamera;
+                    // Set camera if specified
+                    string cameraName = GetAttribute(node, "camera", "");
+                    if (!string.IsNullOrEmpty(cameraName))
+                    {
+                        Camera cam = GameObject.Find(cameraName)?.GetComponent<Camera>();
+                        if (cam != null) nestedCanvas.worldCamera = cam;
+                    }
+                    break;
+                case "world":
+                    nestedCanvas.renderMode = RenderMode.WorldSpace;
+                    break;
+                default:
+                    nestedCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
+                    Debug.LogWarning($"UGUIML: Unknown render mode '{renderMode}', defaulting to overlay");
+                    break;
+            }
+
+            // Set sorting order
+            nestedCanvas.sortingOrder = GetIntAttribute(node, "sortingOrder", 0);
+            
+            // Set sorting layer
+            string sortingLayer = GetAttribute(node, "sortingLayer", "");
+            if (!string.IsNullOrEmpty(sortingLayer))
+            {
+                nestedCanvas.sortingLayerName = sortingLayer;
+            }
+
+            // Set pixel perfect
+            nestedCanvas.pixelPerfect = GetBoolAttribute(node, "pixelPerfect", false);
+
+            // Set plane distance for screen space camera mode
+            if (nestedCanvas.renderMode == RenderMode.ScreenSpaceCamera)
+            {
+                nestedCanvas.planeDistance = GetFloatAttribute(node, "planeDistance", 100f);
+            }
+
+            // Add GraphicRaycaster for UI interaction
+            GraphicRaycaster raycaster = canvasObject.AddComponent<GraphicRaycaster>();
+            
+            // Configure raycaster
+            raycaster.ignoreReversedGraphics = GetBoolAttribute(node, "ignoreReversedGraphics", true);
+            raycaster.blockingObjects = GetBoolAttribute(node, "blockingObjects", false) ? 
+                GraphicRaycaster.BlockingObjects.All : GraphicRaycaster.BlockingObjects.None;
+
+            // Add CanvasScaler for responsive design
+            CanvasScaler scaler = canvasObject.AddComponent<CanvasScaler>();
+            
+            // Configure scaler
+            string scaleMode = GetAttribute(node, "scaleMode", "scalewithscreensize").ToLower();
+            switch (scaleMode)
+            {
+                case "constantpixelsize":
+                    scaler.uiScaleMode = CanvasScaler.ScaleMode.ConstantPixelSize;
+                    scaler.scaleFactor = GetFloatAttribute(node, "scaleFactor", 1f);
+                    break;
+                case "scalewithscreensize":
+                    scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+                    scaler.referenceResolution = ParseVector2(GetAttribute(node, "referenceResolution", "1920,1080"));
+                    scaler.screenMatchMode = GetBoolAttribute(node, "matchWidth", true) ? 
+                        CanvasScaler.ScreenMatchMode.MatchWidthOrHeight : CanvasScaler.ScreenMatchMode.Expand;
+                    scaler.matchWidthOrHeight = GetFloatAttribute(node, "matchWidthOrHeight", 0f);
+                    break;
+                case "constantphysicalsize":
+                    scaler.uiScaleMode = CanvasScaler.ScaleMode.ConstantPhysicalSize;
+                    scaler.physicalUnit = CanvasScaler.Unit.Points;
+                    scaler.fallbackScreenDPI = GetFloatAttribute(node, "fallbackScreenDPI", 96f);
+                    scaler.defaultSpriteDPI = GetFloatAttribute(node, "defaultSpriteDPI", 96f);
+                    break;
+                default:
+                    scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+                    break;
+            }
+
+            // Add to dictionaries
+            string canvasName = GetAttribute(node, "name", "");
+            nestedCanvases[canvasName] = nestedCanvas;
+            nestedRaycasters[canvasName] = raycaster;
+
+            Debug.Log($"UGUIML: Created nested canvas '{canvasName}' with render mode {nestedCanvas.renderMode}");
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"UGUIML CreateNestedCanvas: Exception - {e.Message}\nStack: {e.StackTrace}");
+            throw;
+        }
+    }
+
     private void CreateText(GameObject textObject, XmlNode node)
     {
         TMP_Text textComponent = textObject.AddComponent<TextMeshProUGUI>();
@@ -610,8 +768,8 @@ public class UGUIML : MonoBehaviour
         // Add Button component
         Button button = buttonObject.AddComponent<Button>();
         
-        // Add UGUIMLButton component
-        UGUIMLButton uguimlButton = buttonObject.AddComponent<UGUIMLButton>();
+        // Note: UGUIMLButton component is now replaced by event system in UGUIMLElement
+        // The button events are handled automatically by UGUIMLElement.SetupEventHandlers()
         
         // Handle binding and default resources
         int bindId = GetIntAttribute(node, "bindId", -1);
@@ -652,19 +810,12 @@ public class UGUIML : MonoBehaviour
         buttonImage.raycastTarget = GetBoolAttribute(node, "raycastTarget", true); // Buttons need raycast by default
         buttonImage.maskable = GetBoolAttribute(node, "maskable", false);
 
-        // Configure command and ensure event listener is assigned
-        string command = GetAttribute(node, "command", "");
-        if (!string.IsNullOrEmpty(command))
-        {
-            uguimlButton.SetCommand(command);
-            // Ensure the command listener is properly assigned
-            button.onClick.RemoveAllListeners(); // Clear any existing listeners
-            button.onClick.AddListener(uguimlButton.ExecuteCommand);
-        }
+        // Note: Command handling is now done automatically by UGUIMLElement event system
+        // The 'command' attribute (or onClick, etc.) will be parsed and handled in UGUIMLElement.SetupEventHandlers()
 
-        // Add to buttons dictionary
+        // Add to buttons dictionary (now stores the Button component instead of UGUIMLButton)
         string buttonName = GetAttribute(node, "name", "");
-        buttons[buttonName] = uguimlButton;
+        buttons[buttonName] = button;
 
         // Create text child for button label if specified
         string buttonText = GetAttribute(node, "text", "");
@@ -1545,13 +1696,29 @@ public class UGUIML : MonoBehaviour
 
     private void ConfigureRectTransform(RectTransform rectTransform, XmlNode node)
     {
-        // Position
-        Vector2 position = ParseVector2(GetAttribute(node, "position", "0,0"));
+        // Position - support both 'position' and 'anchoredPosition' attributes
+        string positionAttr = GetAttribute(node, "position", "");
+        if (string.IsNullOrEmpty(positionAttr))
+        {
+            positionAttr = GetAttribute(node, "anchoredPosition", "0,0");
+        }
+        Vector2 position = ParseVector2(positionAttr);
         rectTransform.anchoredPosition = position;
 
-        // Size
-        Vector2 size = ParseVector2(GetAttribute(node, "size", "100,100"));
-        rectTransform.sizeDelta = size;
+        // Size - support both 'size' and 'width,height' attributes
+        string sizeAttr = GetAttribute(node, "size", "");
+        if (string.IsNullOrEmpty(sizeAttr))
+        {
+            // Try width/height attributes
+            float width = GetFloatAttribute(node, "width", 100f);
+            float height = GetFloatAttribute(node, "height", 100f);
+            rectTransform.sizeDelta = new Vector2(width, height);
+        }
+        else
+        {
+            Vector2 size = ParseVector2(sizeAttr);
+            rectTransform.sizeDelta = size;
+        }
 
         // Anchors
         Vector2 anchorMin = ParseVector2(GetAttribute(node, "anchorMin", "0.5,0.5"));

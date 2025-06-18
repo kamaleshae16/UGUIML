@@ -1,12 +1,15 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
+using System.Reflection;
 using System.Xml;
 using UnityEngine;
+using UnityEngine.Events;
 using UnityEngine.UI;
 using TMPro;
 
 /// <summary>
-/// Base component for all UGUIML-created UI elements that handles animations and bindings
+/// Base component for all UGUIML-created UI elements that handles animations, bindings, and events
 /// </summary>
 public class UGUIMLElement : MonoBehaviour
 {
@@ -19,6 +22,10 @@ public class UGUIMLElement : MonoBehaviour
     [Header("Animation Settings")]
     [SerializeField] private float animationSpeed = 1f;
     [SerializeField] private AnimationCurve animationCurve = AnimationCurve.EaseInOut(0, 0, 1, 1);
+
+    [Header("Event Settings")]
+    [SerializeField] private bool logEventExecution = true;
+    [SerializeField] private List<UIEventHandler> eventHandlers = new List<UIEventHandler>();
 
     private UGUIML parentUGUIML;
     private RectTransform rectTransform;
@@ -35,11 +42,15 @@ public class UGUIMLElement : MonoBehaviour
     private Vector3 originalScale;
     private float originalAlpha;
 
+    // Event system components
+    private Dictionary<string, Component> eventSources = new Dictionary<string, Component>();
+
     public string ElementName => elementName;
     public string ElementType => elementType;
     public int BindingId => bindingId;
     public RectTransform RectTransform => rectTransform;
     public CanvasGroup CanvasGroup => canvasGroup;
+    public List<UIEventHandler> EventHandlers => eventHandlers;
 
     #region Initialization
 
@@ -78,6 +89,393 @@ public class UGUIMLElement : MonoBehaviour
         originalPosition = rectTransform.anchoredPosition;
         originalScale = rectTransform.localScale;
         originalAlpha = canvasGroup.alpha;
+
+        // Setup events after the element is fully initialized
+        StartCoroutine(SetupEventsNextFrame());
+    }
+
+    private IEnumerator SetupEventsNextFrame()
+    {
+        yield return null; // Wait one frame for all components to be added
+        SetupEventHandlers();
+    }
+
+    #endregion
+
+    #region Event System
+
+    /// <summary>
+    /// Setup event handlers based on XML attributes and component types
+    /// </summary>
+    private void SetupEventHandlers()
+    {
+        if (sourceNode == null) return;
+
+        // Clear existing handlers
+        eventHandlers.Clear();
+        eventSources.Clear();
+
+        // Cache UI components for event binding
+        CacheEventSources();
+
+        // Parse event attributes from XML
+        ParseEventAttributes();
+
+        // Bind events to their respective components
+        BindEventHandlers();
+    }
+
+    /// <summary>
+    /// Cache all UI components that can trigger events
+    /// </summary>
+    private void CacheEventSources()
+    {
+        // Button events
+        var button = GetComponent<Button>();
+        if (button != null) eventSources["button"] = button;
+
+        // Toggle events  
+        var toggle = GetComponent<Toggle>();
+        if (toggle != null) eventSources["toggle"] = toggle;
+
+        // Slider events
+        var slider = GetComponent<Slider>();
+        if (slider != null) eventSources["slider"] = slider;
+
+        // InputField events
+        var inputField = GetComponent<TMP_InputField>();
+        if (inputField != null) eventSources["inputfield"] = inputField;
+
+        // Dropdown events
+        var dropdown = GetComponent<TMP_Dropdown>();
+        if (dropdown != null) eventSources["dropdown"] = dropdown;
+
+        // Scrollbar events
+        var scrollbar = GetComponent<Scrollbar>();
+        if (scrollbar != null) eventSources["scrollbar"] = scrollbar;
+
+        // ScrollRect events
+        var scrollRect = GetComponent<ScrollRect>();
+        if (scrollRect != null) eventSources["scrollrect"] = scrollRect;
+    }
+
+    /// <summary>
+    /// Parse event-related attributes from XML
+    /// </summary>
+    private void ParseEventAttributes()
+    {
+        if (sourceNode?.Attributes == null) return;
+
+        foreach (XmlAttribute attribute in sourceNode.Attributes)
+        {
+            string attrName = attribute.Name.ToLower();
+            string attrValue = attribute.Value;
+
+            // Parse event attributes (e.g., onClick, onValueChanged, onEndEdit, etc.)
+            if (attrName.StartsWith("on"))
+            {
+                string eventType = attrName.Substring(2); // Remove "on" prefix
+                ParseEventHandler(eventType, attrValue);
+            }
+            // Support for 'command' attribute (alternative to onClick)
+            else if (attrName == "command")
+            {
+                ParseEventHandler("click", attrValue);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Parse a single event handler from attribute value
+    /// </summary>
+    private void ParseEventHandler(string eventType, string eventValue)
+    {
+        if (string.IsNullOrEmpty(eventValue)) return;
+
+        var handler = new UIEventHandler
+        {
+            eventType = eventType.ToLower(),
+            eventValue = eventValue
+        };
+
+        // Parse parameters if they exist (separated by |)
+        string[] parts = eventValue.Split('|');
+        handler.commandName = parts[0];
+        
+        if (parts.Length > 1)
+        {
+            handler.parameters = new string[parts.Length - 1];
+            Array.Copy(parts, 1, handler.parameters, 0, parts.Length - 1);
+        }
+
+        eventHandlers.Add(handler);
+    }
+
+    /// <summary>
+    /// Bind parsed event handlers to their respective UI components
+    /// </summary>
+    private void BindEventHandlers()
+    {
+        foreach (var handler in eventHandlers)
+        {
+            BindEventHandler(handler);
+        }
+    }
+
+    /// <summary>
+    /// Bind a single event handler to the appropriate component
+    /// </summary>
+    private void BindEventHandler(UIEventHandler handler)
+    {
+        try
+        {
+            switch (handler.eventType)
+            {
+                case "click":
+                    BindButtonClick(handler);
+                    break;
+                case "valuechanged":
+                    BindValueChanged(handler);
+                    break;
+                case "endedit":
+                    BindInputFieldEndEdit(handler);
+                    break;
+                case "submit":
+                    BindInputFieldSubmit(handler);
+                    break;
+                case "scroll":
+                    BindScrollRectValueChanged(handler);
+                    break;
+                default:
+                    Debug.LogWarning($"UGUIMLElement '{elementName}': Unknown event type '{handler.eventType}'");
+                    break;
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"UGUIMLElement '{elementName}': Failed to bind event '{handler.eventType}' - {e.Message}");
+        }
+    }
+
+    private void BindButtonClick(UIEventHandler handler)
+    {
+        if (eventSources.TryGetValue("button", out Component component) && component is Button button)
+        {
+            button.onClick.AddListener(() => ExecuteEventHandler(handler));
+        }
+    }
+
+    private void BindValueChanged(UIEventHandler handler)
+    {
+        // Try different value-changed events based on available components
+        if (eventSources.TryGetValue("toggle", out Component toggleComp) && toggleComp is Toggle toggle)
+        {
+            toggle.onValueChanged.AddListener(value => ExecuteEventHandler(handler, value.ToString()));
+        }
+        else if (eventSources.TryGetValue("slider", out Component sliderComp) && sliderComp is Slider slider)
+        {
+            slider.onValueChanged.AddListener(value => ExecuteEventHandler(handler, value.ToString()));
+        }
+        else if (eventSources.TryGetValue("scrollbar", out Component scrollbarComp) && scrollbarComp is Scrollbar scrollbar)
+        {
+            scrollbar.onValueChanged.AddListener(value => ExecuteEventHandler(handler, value.ToString()));
+        }
+        else if (eventSources.TryGetValue("dropdown", out Component dropdownComp) && dropdownComp is TMP_Dropdown dropdown)
+        {
+            dropdown.onValueChanged.AddListener(value => ExecuteEventHandler(handler, value.ToString()));
+        }
+    }
+
+    private void BindInputFieldEndEdit(UIEventHandler handler)
+    {
+        if (eventSources.TryGetValue("inputfield", out Component component) && component is TMP_InputField inputField)
+        {
+            inputField.onEndEdit.AddListener(text => ExecuteEventHandler(handler, text));
+        }
+    }
+
+    private void BindInputFieldSubmit(UIEventHandler handler)
+    {
+        if (eventSources.TryGetValue("inputfield", out Component component) && component is TMP_InputField inputField)
+        {
+            inputField.onSubmit.AddListener(text => ExecuteEventHandler(handler, text));
+        }
+    }
+
+    private void BindScrollRectValueChanged(UIEventHandler handler)
+    {
+        if (eventSources.TryGetValue("scrollrect", out Component component) && component is ScrollRect scrollRect)
+        {
+            scrollRect.onValueChanged.AddListener(value => ExecuteEventHandler(handler, value.x.ToString(), value.y.ToString()));
+        }
+    }
+
+    /// <summary>
+    /// Execute an event handler with optional runtime parameters
+    /// </summary>
+    private void ExecuteEventHandler(UIEventHandler handler, params string[] runtimeParams)
+    {
+        if (logEventExecution)
+        {
+            string paramStr = runtimeParams.Length > 0 ? $" with params: {string.Join(", ", runtimeParams)}" : "";
+            Debug.Log($"UGUIMLElement '{elementName}': Executing {handler.eventType} event: {handler.commandName}{paramStr}");
+        }
+
+        // Try Unity Event execution first
+        if (TryExecuteWithUnityEvents(handler, runtimeParams))
+            return;
+
+        // Try method invocation on UGUIML parent
+        if (TryExecuteWithMethodInvocation(handler, runtimeParams))
+            return;
+
+        Debug.LogWarning($"UGUIMLElement '{elementName}': No execution method found for command '{handler.commandName}'");
+    }
+
+
+
+    private bool TryExecuteWithUnityEvents(UIEventHandler handler, string[] runtimeParams)
+    {
+        // Look for UnityEvent fields in UGUIML component
+        var uguimlType = parentUGUIML.GetType();
+        var eventField = uguimlType.GetField(handler.commandName, BindingFlags.Public | BindingFlags.Instance);
+        
+        if (eventField != null && typeof(UnityEventBase).IsAssignableFrom(eventField.FieldType))
+        {
+            var unityEvent = eventField.GetValue(parentUGUIML) as UnityEventBase;
+            if (unityEvent != null)
+            {
+                // Use reflection to invoke with parameters
+                var invokeMethod = unityEvent.GetType().GetMethod("Invoke");
+                if (invokeMethod != null)
+                {
+                    // Convert string parameters to appropriate types
+                    var paramTypes = invokeMethod.GetParameters();
+                    var convertedParams = ConvertParameters(runtimeParams, paramTypes);
+                    invokeMethod.Invoke(unityEvent, convertedParams);
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private bool TryExecuteWithMethodInvocation(UIEventHandler handler, string[] runtimeParams)
+    {
+        // Try to invoke method directly on UGUIML component
+        var uguimlType = parentUGUIML.GetType();
+        var allParams = new List<string>();
+        if (handler.parameters != null) allParams.AddRange(handler.parameters);
+        allParams.AddRange(runtimeParams);
+
+        // Try to find method with matching parameter count
+        var methods = uguimlType.GetMethods(BindingFlags.Public | BindingFlags.Instance);
+        foreach (var method in methods)
+        {
+            if (method.Name == handler.commandName)
+            {
+                var paramTypes = method.GetParameters();
+                if (paramTypes.Length == allParams.Count)
+                {
+                    try
+                    {
+                        var convertedParams = ConvertParameters(allParams.ToArray(), paramTypes);
+                        method.Invoke(parentUGUIML, convertedParams);
+                        return true;
+                    }
+                    catch (Exception e)
+                    {
+                        Debug.LogWarning($"UGUIMLElement '{elementName}': Failed to invoke method '{handler.commandName}' - {e.Message}");
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private object[] ConvertParameters(string[] stringParams, ParameterInfo[] paramTypes)
+    {
+        if (stringParams.Length != paramTypes.Length)
+            return null;
+
+        object[] converted = new object[stringParams.Length];
+        for (int i = 0; i < stringParams.Length; i++)
+        {
+            try
+            {
+                converted[i] = Convert.ChangeType(stringParams[i], paramTypes[i].ParameterType);
+            }
+            catch
+            {
+                converted[i] = stringParams[i]; // Fallback to string
+            }
+        }
+        return converted;
+    }
+
+    /// <summary>
+    /// Add an event handler programmatically
+    /// </summary>
+    public void AddEventHandler(string eventType, string commandName, params string[] parameters)
+    {
+        var handler = new UIEventHandler
+        {
+            eventType = eventType.ToLower(),
+            commandName = commandName,
+            parameters = parameters,
+            eventValue = parameters.Length > 0 ? $"{commandName}|{string.Join("|", parameters)}" : commandName
+        };
+
+        eventHandlers.Add(handler);
+        BindEventHandler(handler);
+    }
+
+    /// <summary>
+    /// Remove all event handlers of a specific type
+    /// </summary>
+    public void RemoveEventHandlers(string eventType)
+    {
+        eventHandlers.RemoveAll(h => h.eventType.Equals(eventType, StringComparison.OrdinalIgnoreCase));
+        // Note: This doesn't unbind already bound events. For full cleanup, call SetupEventHandlers()
+    }
+
+    /// <summary>
+    /// Clear all event handlers and unbind events
+    /// </summary>
+    public void ClearAllEventHandlers()
+    {
+        eventHandlers.Clear();
+        
+        // Unbind all events by removing all listeners
+        foreach (var kvp in eventSources)
+        {
+            var component = kvp.Value;
+            switch (component)
+            {
+                case Button button:
+                    button.onClick.RemoveAllListeners();
+                    break;
+                case Toggle toggle:
+                    toggle.onValueChanged.RemoveAllListeners();
+                    break;
+                case Slider slider:
+                    slider.onValueChanged.RemoveAllListeners();
+                    break;
+                case TMP_InputField inputField:
+                    inputField.onEndEdit.RemoveAllListeners();
+                    inputField.onSubmit.RemoveAllListeners();
+                    break;
+                case TMP_Dropdown dropdown:
+                    dropdown.onValueChanged.RemoveAllListeners();
+                    break;
+                case Scrollbar scrollbar:
+                    scrollbar.onValueChanged.RemoveAllListeners();
+                    break;
+                case ScrollRect scrollRect:
+                    scrollRect.onValueChanged.RemoveAllListeners();
+                    break;
+            }
+        }
     }
 
     #endregion
@@ -339,7 +737,25 @@ public class UGUIMLElement : MonoBehaviour
 
     public void RemoveBinding()
     {
-        UGUIMLResources.Singleton.resources[bindingId].bindings.Remove(this);
+        // Check if we have a valid binding and UGUIMLResources exists
+        if (bindingId < 0 || UGUIMLResources.Singleton == null) 
+        {
+            bindingId = -1;
+            return;
+        }
+
+        // Check if resources array exists and bindingId is within bounds
+        if (UGUIMLResources.Singleton.resources != null && 
+            bindingId < UGUIMLResources.Singleton.resources.Count)
+        {
+            // Safely remove the binding
+            var resource = UGUIMLResources.Singleton.resources[bindingId];
+            if (resource?.bindings != null)
+            {
+                resource.bindings.Remove(this);
+            }
+        }
+        
         bindingId = -1;
     }
 
@@ -400,6 +816,15 @@ public class UGUIMLElement : MonoBehaviour
 /// <summary>
 /// Directions for off-screen animations
 /// </summary>
+[System.Serializable]
+public class UIEventHandler
+{
+    public string eventType;
+    public string commandName;
+    public string[] parameters;
+    public string eventValue;
+}
+
 public enum OffScreenDirection
 {
     Left,

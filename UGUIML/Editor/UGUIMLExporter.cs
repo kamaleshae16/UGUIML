@@ -211,7 +211,12 @@ public class UGUIMLExporter : EditorWindow
         string elementName = gameObject.name;
         
         // Check for different component types in order of priority
-        if (gameObject.GetComponent<TMP_Dropdown>() != null)
+        if (gameObject.GetComponent<Canvas>() != null && gameObject != targetCanvas.gameObject)
+        {
+            // Only export nested canvases (not the root canvas)
+            element = CreateCanvasElement(gameObject, doc);
+        }
+        else if (gameObject.GetComponent<TMP_Dropdown>() != null)
         {
             element = CreateDropdownElement(gameObject, doc);
         }
@@ -347,7 +352,7 @@ public class UGUIMLExporter : EditorWindow
         
         Button button = gameObject.GetComponent<Button>();
         Image image = gameObject.GetComponent<Image>();
-        UGUIMLButton uguimlButton = gameObject.GetComponent<UGUIMLButton>();
+        UGUIMLElement uguimlElement = gameObject.GetComponent<UGUIMLElement>();
         
         if (image != null)
         {
@@ -355,9 +360,19 @@ public class UGUIMLExporter : EditorWindow
             element.SetAttribute("raycastTarget", image.raycastTarget.ToString().ToLower());
         }
         
-        if (uguimlButton != null)
+        // Export event handlers from UGUIMLElement
+        if (uguimlElement != null && uguimlElement.EventHandlers != null)
         {
-            element.SetAttribute("command", uguimlButton.Command);
+            foreach (var handler in uguimlElement.EventHandlers)
+            {
+                if (handler.eventType == "click")
+                {
+                    // Use onClick for new syntax, command for compatibility
+                    string attributeName = handler.eventValue.StartsWith("onClick") ? "onClick" : "command";
+                    element.SetAttribute(attributeName, handler.eventValue);
+                    break; // Only export the first click handler
+                }
+            }
         }
         
         // Look for text child
@@ -369,6 +384,76 @@ public class UGUIMLExporter : EditorWindow
             element.SetAttribute("textColor", ColorToHex(textComponent.color));
         }
         
+        return element;
+    }
+
+    private XmlElement CreateCanvasElement(GameObject gameObject, XmlDocument doc)
+    {
+        XmlElement element = doc.CreateElement("canvas");
+        
+        Canvas canvas = gameObject.GetComponent<Canvas>();
+        if (canvas != null)
+        {
+            // Export render mode
+            switch (canvas.renderMode)
+            {
+                case RenderMode.ScreenSpaceOverlay:
+                    element.SetAttribute("renderMode", "overlay");
+                    break;
+                case RenderMode.ScreenSpaceCamera:
+                    element.SetAttribute("renderMode", "camera");
+                    if (canvas.worldCamera != null)
+                    {
+                        element.SetAttribute("camera", canvas.worldCamera.name);
+                    }
+                    element.SetAttribute("planeDistance", canvas.planeDistance.ToString("F1"));
+                    break;
+                case RenderMode.WorldSpace:
+                    element.SetAttribute("renderMode", "world");
+                    break;
+            }
+
+            element.SetAttribute("sortingOrder", canvas.sortingOrder.ToString());
+            
+            if (!string.IsNullOrEmpty(canvas.sortingLayerName))
+            {
+                element.SetAttribute("sortingLayer", canvas.sortingLayerName);
+            }
+            
+            element.SetAttribute("pixelPerfect", canvas.pixelPerfect.ToString().ToLower());
+        }
+
+        // Export Canvas Scaler if present
+        CanvasScaler scaler = gameObject.GetComponent<CanvasScaler>();
+        if (scaler != null)
+        {
+            switch (scaler.uiScaleMode)
+            {
+                case CanvasScaler.ScaleMode.ConstantPixelSize:
+                    element.SetAttribute("scaleMode", "constantpixelsize");
+                    element.SetAttribute("scaleFactor", scaler.scaleFactor.ToString("F2"));
+                    break;
+                case CanvasScaler.ScaleMode.ScaleWithScreenSize:
+                    element.SetAttribute("scaleMode", "scalewithscreensize");
+                    element.SetAttribute("referenceResolution", $"{scaler.referenceResolution.x},{scaler.referenceResolution.y}");
+                    element.SetAttribute("matchWidthOrHeight", scaler.matchWidthOrHeight.ToString("F2"));
+                    break;
+                case CanvasScaler.ScaleMode.ConstantPhysicalSize:
+                    element.SetAttribute("scaleMode", "constantphysicalsize");
+                    element.SetAttribute("fallbackScreenDPI", scaler.fallbackScreenDPI.ToString("F0"));
+                    element.SetAttribute("defaultSpriteDPI", scaler.defaultSpriteDPI.ToString("F0"));
+                    break;
+            }
+        }
+
+        // Export GraphicRaycaster if present
+        GraphicRaycaster raycaster = gameObject.GetComponent<GraphicRaycaster>();
+        if (raycaster != null)
+        {
+            element.SetAttribute("ignoreReversedGraphics", raycaster.ignoreReversedGraphics.ToString().ToLower());
+            element.SetAttribute("blockingObjects", (raycaster.blockingObjects != GraphicRaycaster.BlockingObjects.None).ToString().ToLower());
+        }
+
         return element;
     }
 
@@ -408,6 +493,20 @@ public class UGUIMLExporter : EditorWindow
         if (image != null)
         {
             element.SetAttribute("backgroundColor", ColorToHex(image.color));
+        }
+
+        // Export event handlers from UGUIMLElement
+        UGUIMLElement uguimlElement = gameObject.GetComponent<UGUIMLElement>();
+        if (uguimlElement != null && uguimlElement.EventHandlers != null)
+        {
+            foreach (var handler in uguimlElement.EventHandlers)
+            {
+                if (handler.eventType == "scroll")
+                {
+                    element.SetAttribute("onScroll", handler.eventValue);
+                    break; // Only export the first scroll handler
+                }
+            }
         }
         
         return element;
@@ -480,6 +579,20 @@ public class UGUIMLExporter : EditorWindow
             element.SetAttribute("fontSize", textComponent.fontSize.ToString("F1"));
             element.SetAttribute("textColor", ColorToHex(textComponent.color));
         }
+
+        // Export event handlers from UGUIMLElement
+        UGUIMLElement uguimlElement = gameObject.GetComponent<UGUIMLElement>();
+        if (uguimlElement != null && uguimlElement.EventHandlers != null)
+        {
+            foreach (var handler in uguimlElement.EventHandlers)
+            {
+                if (handler.eventType == "valueChanged")
+                {
+                    element.SetAttribute("onValueChanged", handler.eventValue);
+                    break; // Only export the first value changed handler
+                }
+            }
+        }
         
         return element;
     }
@@ -511,6 +624,27 @@ public class UGUIMLExporter : EditorWindow
         if (image != null)
         {
             element.SetAttribute("backgroundColor", ColorToHex(image.color));
+        }
+
+        // Export event handlers from UGUIMLElement
+        UGUIMLElement uguimlElement = gameObject.GetComponent<UGUIMLElement>();
+        if (uguimlElement != null && uguimlElement.EventHandlers != null)
+        {
+            foreach (var handler in uguimlElement.EventHandlers)
+            {
+                if (handler.eventType == "valueChanged")
+                {
+                    element.SetAttribute("onValueChanged", handler.eventValue);
+                }
+                else if (handler.eventType == "endEdit")
+                {
+                    element.SetAttribute("onEndEdit", handler.eventValue);
+                }
+                else if (handler.eventType == "submit")
+                {
+                    element.SetAttribute("onSubmit", handler.eventValue);
+                }
+            }
         }
         
         return element;
